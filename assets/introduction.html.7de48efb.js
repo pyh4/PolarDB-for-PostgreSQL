@@ -1,0 +1,1 @@
+const t=JSON.parse('{"key":"v-62263e84","path":"/zh/guide/introduction.html","title":"PolarDB \u67B6\u6784\u7B80\u4ECB","lang":"zh-CN","frontmatter":{},"excerpt":"","headers":[],"git":{"updatedTime":1652077255000,"contributors":[{"name":"\u68E0\u7FBD","email":"zhangjingtang.zjt@alibaba-inc.com","commits":1}]},"filePathRelative":"zh/guide/introduction.md"}');export{t as data};
