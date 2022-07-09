@@ -133,6 +133,8 @@ function px_init() {
   echo "polar_px_enable_adps_explain_analyze=1" >> $pg_bld_master_dir/postgresql.conf
   echo "polar_trace_heap_scan_flow=1" >> $pg_bld_master_dir/postgresql.conf
   echo "polar_px_enable_spi_read_all_namespaces=1" >> $pg_bld_master_dir/postgresql.conf
+  echo "polar_px_enable_btbuild=on" >> $pg_bld_master_dir/postgresql.conf
+  echo "polar_px_enable_matviewbuild=on" >> $pg_bld_master_dir/postgresql.conf
   su_eval "$pg_bld_basedir/bin/pg_ctl -D $pg_bld_master_dir reload"
 }
 
