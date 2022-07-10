@@ -3,6 +3,9 @@ create extension if not exists pageinspect;
 
 -- use polar_px_enable_btbuild guc
 -- 1
+-- 1) create two tables with exactly the same content, one with polar_px_enable_btbuild = on while another with polar_px_enable_btbuild = off
+-- 2) select their page content separately
+-- 3) join two tables's page content on both itemoffset and data, and verify that they are with the same content.
 drop table if exists px_test;
 drop table if exists px_test_1;
 select id into px_test from generate_series(1, 1000) as id order by id desc;
@@ -30,6 +33,9 @@ drop index px_t;
 drop index px_t_1;
 
 -- 2
+-- 1) create a table and build index with polar_px_enable_btbuild = on
+-- 2) create another table and build index with polar_px_enable_btbuild = off
+-- 3) compare their page content
 drop table if exists px_test;
 drop table if exists px_test_1;
 create table px_test(id1 int, id2 int, id3 int, id4 int);

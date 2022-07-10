@@ -3304,6 +3304,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 	 */
 	header(_("running regression test queries"));
 
+	/* Tests are run here */
 	for (sl = schedulelist; sl != NULL; sl = sl->next)
 	{
 		run_schedule(sl->str, tfunc);
