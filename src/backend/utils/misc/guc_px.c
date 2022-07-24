@@ -258,6 +258,7 @@ bool		px_enable_udp_testmode;
 bool		px_enable_tcp_testmode;
 bool		px_enable_remove_redundant_results;
 bool		px_enable_btbuild;
+bool		px_enable_matviewbuild;
 bool		px_enable_btbuild_cic_phase2;
 int 		px_btbuild_batch_size;
 int			px_btbuild_mem_size;
@@ -1662,6 +1663,17 @@ struct config_bool ConfigureNamesBool_px[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&px_enable_btbuild,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_px_enable_matviewbuild", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Polar PX enable materialized view build"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&px_enable_matviewbuild,
 		false,
 		NULL, NULL, NULL
 	},

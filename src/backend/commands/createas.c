@@ -236,6 +236,11 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
+	int cursorOptions = CURSOR_OPT_PARALLEL_OK;
+
+	if (is_matview && px_enable_matviewbuild) {
+		cursorOptions |= CURSOR_OPT_PX_OK;
+	}
 
 	if (stmt->if_not_exists)
 	{
@@ -327,7 +332,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		Assert(query->commandType == CMD_SELECT);
 
 		/* plan the query */
-		plan = pg_plan_query(query, CURSOR_OPT_PARALLEL_OK, params);
+		plan = pg_plan_query(query, cursorOptions, params);
 
 		/*
 		 * Use a snapshot with an updated command ID to ensure this query sees
