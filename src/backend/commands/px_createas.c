@@ -162,170 +162,171 @@ void executeSQL(const char *sql)
 	MemoryContext oldcontext;
 
 	parsetree_list = pg_parse_query(sql);
-	Assert(list_length(parsetree_list) == 1);
-	parsetree_item = linitial_node(ListCell, parsetree_list);
 
-	RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
-	bool snapshot_set = false;
-	const char *commandTag;
-	char completionTag[COMPLETION_TAG_BUFSIZE];
-	List *querytree_list,
-		*plantree_list;
-	Portal portal;
-	DestReceiver *receiver;
-	int16 format;
-
-	/* POLAR px: begin */
-	/* reset false every time*/
-	px_use_global_function = false;
-	px_is_planning = false;
-	px_is_executing = false;
-	px_adaptive_paging = px_enable_adaptive_scan;
-
-	/*
-	 * Get the command name for use in status display (it also becomes the
-	 * default completion tag, down inside PortalRun).  Set ps_status and
-	 * do any special start-of-SQL-command processing needed by the
-	 * destination.
-	 */
-	commandTag = CreateCommandTag(parsetree->stmt);
-
-	set_ps_display(commandTag, false);
-
-	BeginCommand(commandTag, dest);
-
-	// /*
-	//  * If we are in an aborted transaction, reject all commands except
-	//  * COMMIT/ABORT.  It is important that this test occur before we try
-	//  * to do parse analysis, rewrite, or planning, since all those phases
-	//  * try to do database accesses, which may fail in abort state. (It
-	//  * might be safe to allow some additional utility commands in this
-	//  * state, but not many...)
-	//  */
-	// if (IsAbortedTransactionBlockState() &&
-	// 	!IsTransactionExitStmt(parsetree->stmt))
-	// 	ereport(ERROR,
-	// 			(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
-	// 			 errmsg("current transaction is aborted, "
-	// 					"commands ignored until end of transaction block"),
-	// 			 errdetail_abort()));
-
-	/* Make sure we are in a transaction command */
-	// start_xact_command();
-
-	/* If we got a cancel signal in parsing or prior command, quit */
-	CHECK_FOR_INTERRUPTS();
-
-	/*
-	 * Set up a snapshot if parse analysis/planning will need one.
-	 */
-	// if (analyze_requires_snapshot(parsetree))
-	// {
-	// 	PushActiveSnapshot(GetTransactionSnapshot());
-	// 	snapshot_set = true;
-	// }
-	PushActiveSnapshot(GetTransactionSnapshot());
-
-	/*
-	 * OK to analyze, rewrite, and plan this query.
-	 *
-	 * Switch to appropriate context for constructing querytrees (again,
-	 * these must outlive the execution context).
-	 */
-	oldcontext = MemoryContextSwitchTo(MessageContext);
-
-	querytree_list = pg_analyze_and_rewrite(parsetree, sql,
-											NULL, 0, NULL);
-
-	plantree_list = pg_plan_queries(querytree_list,
-									CURSOR_OPT_PARALLEL_OK | CURSOR_OPT_PX_OK, NULL);
-
-	// /* Done with the snapshot used for parsing/planning */
-	// if (snapshot_set)
-	PopActiveSnapshot();
-
-	/* If we got a cancel signal in analysis or planning, quit */
-	CHECK_FOR_INTERRUPTS();
-
-	/*
-	 * Create unnamed portal to run the query or queries in. If there
-	 * already is one, silently drop it.
-	 */
-	portal = CreatePortal("matview_insert_select", true, true);
-	/* Don't display the portal in pg_cursors */
-	portal->visible = false;
-
-	/*
-	 * We don't have to copy anything into the portal, because everything
-	 * we are passing here is in MessageContext, which will outlive the
-	 * portal anyway.
-	 */
-	PortalDefineQuery(portal,
-					  NULL,
-					  sql,
-					  T_Invalid, /* POLAR px */
-					  commandTag,
-					  plantree_list,
-					  NULL);
-
-	/*
-	 * Start the portal.  No parameters here.
-	 */
-	PortalStart(portal,
-				NULL,
-				0,
-				InvalidSnapshot,
-				NULL /* POALR px */
-	);
-
-	/*
-	 * Select the appropriate output format: text unless we are doing a
-	 * FETCH from a binary cursor.  (Pretty grotty to have to do this here
-	 * --- but it avoids grottiness in other places.  Ah, the joys of
-	 * backward compatibility...)
-	 */
-	format = 0; /* TEXT is default */
-	if (IsA(parsetree->stmt, FetchStmt))
+	foreach (parsetree_item, parsetree_list)
 	{
-		FetchStmt *stmt = (FetchStmt *)parsetree->stmt;
+		RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
+		bool snapshot_set = false;
+		const char *commandTag;
+		char completionTag[COMPLETION_TAG_BUFSIZE];
+		List *querytree_list,
+			*plantree_list;
+		Portal portal;
+		DestReceiver *receiver;
+		int16 format;
 
-		if (!stmt->ismove)
+		/* POLAR px: begin */
+		/* reset false every time*/
+		px_use_global_function = false;
+		px_is_planning = false;
+		px_is_executing = false;
+		px_adaptive_paging = px_enable_adaptive_scan;
+
+		/*
+		 * Get the command name for use in status display (it also becomes the
+		 * default completion tag, down inside PortalRun).  Set ps_status and
+		 * do any special start-of-SQL-command processing needed by the
+		 * destination.
+		 */
+		commandTag = CreateCommandTag(parsetree->stmt);
+
+		set_ps_display(commandTag, false);
+
+		BeginCommand(commandTag, dest);
+
+		// /*
+		//  * If we are in an aborted transaction, reject all commands except
+		//  * COMMIT/ABORT.  It is important that this test occur before we try
+		//  * to do parse analysis, rewrite, or planning, since all those phases
+		//  * try to do database accesses, which may fail in abort state. (It
+		//  * might be safe to allow some additional utility commands in this
+		//  * state, but not many...)
+		//  */
+		// if (IsAbortedTransactionBlockState() &&
+		// 	!IsTransactionExitStmt(parsetree->stmt))
+		// 	ereport(ERROR,
+		// 			(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
+		// 			 errmsg("current transaction is aborted, "
+		// 					"commands ignored until end of transaction block"),
+		// 			 errdetail_abort()));
+
+		/* Make sure we are in a transaction command */
+		// start_xact_command();
+
+		/* If we got a cancel signal in parsing or prior command, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Set up a snapshot if parse analysis/planning will need one.
+		 */
+		// if (analyze_requires_snapshot(parsetree))
+		// {
+		// 	PushActiveSnapshot(GetTransactionSnapshot());
+		// 	snapshot_set = true;
+		// }
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/*
+		 * OK to analyze, rewrite, and plan this query.
+		 *
+		 * Switch to appropriate context for constructing querytrees (again,
+		 * these must outlive the execution context).
+		 */
+		oldcontext = MemoryContextSwitchTo(MessageContext);
+
+		querytree_list = pg_analyze_and_rewrite(parsetree, sql,
+												NULL, 0, NULL);
+
+		plantree_list = pg_plan_queries(querytree_list,
+										CURSOR_OPT_PARALLEL_OK | CURSOR_OPT_PX_OK, NULL);
+
+		// /* Done with the snapshot used for parsing/planning */
+		// if (snapshot_set)
+		PopActiveSnapshot();
+
+		/* If we got a cancel signal in analysis or planning, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Create unnamed portal to run the query or queries in. If there
+		 * already is one, silently drop it.
+		 */
+		portal = CreatePortal("matview_insert_select", true, true);
+		/* Don't display the portal in pg_cursors */
+		portal->visible = false;
+
+		/*
+		 * We don't have to copy anything into the portal, because everything
+		 * we are passing here is in MessageContext, which will outlive the
+		 * portal anyway.
+		 */
+		PortalDefineQuery(portal,
+						  NULL,
+						  sql,
+						  T_Invalid, /* POLAR px */
+						  commandTag,
+						  plantree_list,
+						  NULL);
+
+		/*
+		 * Start the portal.  No parameters here.
+		 */
+		PortalStart(portal,
+					NULL,
+					0,
+					InvalidSnapshot,
+					NULL /* POALR px */
+		);
+
+		/*
+		 * Select the appropriate output format: text unless we are doing a
+		 * FETCH from a binary cursor.  (Pretty grotty to have to do this here
+		 * --- but it avoids grottiness in other places.  Ah, the joys of
+		 * backward compatibility...)
+		 */
+		format = 0; /* TEXT is default */
+		if (IsA(parsetree->stmt, FetchStmt))
 		{
-			Portal fportal = GetPortalByName(stmt->portalname);
+			FetchStmt *stmt = (FetchStmt *)parsetree->stmt;
 
-			if (PortalIsValid(fportal) &&
-				(fportal->cursorOptions & CURSOR_OPT_BINARY))
-				format = 1; /* BINARY */
+			if (!stmt->ismove)
+			{
+				Portal fportal = GetPortalByName(stmt->portalname);
+
+				if (PortalIsValid(fportal) &&
+					(fportal->cursorOptions & CURSOR_OPT_BINARY))
+					format = 1; /* BINARY */
+			}
 		}
+		PortalSetResultFormat(portal, 1, &format);
+
+		/*
+		 * Now we can create the destination receiver object.
+		 */
+		receiver = CreateDestReceiver(dest);
+		if (dest == DestRemote)
+			SetRemoteDestReceiverParams(receiver, portal);
+
+		/*
+		 * Switch back to transaction context for execution.
+		 */
+		MemoryContextSwitchTo(oldcontext);
+
+		/*
+		 * Run the portal to completion, and then drop it (and the receiver).
+		 */
+		(void)PortalRun(portal,
+						FETCH_ALL,
+						false, /* always top level */
+						true,
+						receiver,
+						receiver,
+						completionTag);
+
+		receiver->rDestroy(receiver);
+
+		PortalDrop(portal, false);
 	}
-	PortalSetResultFormat(portal, 1, &format);
-
-	/*
-	 * Now we can create the destination receiver object.
-	 */
-	receiver = CreateDestReceiver(dest);
-	if (dest == DestRemote)
-		SetRemoteDestReceiverParams(receiver, portal);
-
-	/*
-	 * Switch back to transaction context for execution.
-	 */
-	MemoryContextSwitchTo(oldcontext);
-
-	/*
-	 * Run the portal to completion, and then drop it (and the receiver).
-	 */
-	(void)PortalRun(portal,
-					FETCH_ALL,
-					false, /* always top level */
-					true,
-					receiver,
-					receiver,
-					completionTag);
-
-	receiver->rDestroy(receiver);
-
-	PortalDrop(portal, false);
 
 	// if (lnext(parsetree_item) == NULL)
 	// {
@@ -360,8 +361,7 @@ void executeSQL(const char *sql)
 	// }
 
 	/*
-	 * Tell client that we're done with this query.  Note we emit e
-	 ly
+	 * Tell client that we're done with this query.  Note we emit exactly
 	 * one EndCommand report for each raw parsetree, thus one for each SQL
 	 * command the client sent, regardless of rewriting. (But a command
 	 * aborted by error will not send an EndCommand report at all.)
