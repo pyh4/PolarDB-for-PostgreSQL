@@ -49,6 +49,12 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
+/* POLAR px */
+#include "commands/px_createas.h"
+#ifdef USE_PX
+#include "px_createas.c"
+#endif
+
 
 typedef struct
 {
@@ -237,6 +243,11 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
 	int cursorOptions = CURSOR_OPT_PARALLEL_OK;
+
+	if (px_enable_create_table_as)
+	{
+		return px_create_table_as(stmt, queryString, params, queryEnv, completionTag);
+	}
 
 
 	if (stmt->if_not_exists)
