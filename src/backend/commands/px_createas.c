@@ -389,7 +389,7 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 	QueryDesc *queryDesc;
 	StringInfo sql;
 
-	allow_px_insert_into_matview();
+	// allow_px_insert_into_matview();
 
 	if (stmt->if_not_exists)
 	{
@@ -460,6 +460,8 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 
 		/* create an empty table */
 		address = create_empty_table(query->targetList, into);
+		CommitTransactionCommand();
+		StartTransactionCommand();
 
 		/* make up a SQL statement */
 		sql = makeStringInfo();
