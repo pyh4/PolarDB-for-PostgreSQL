@@ -59,7 +59,7 @@ exec_px_query(const char *query_string,
 	ParamListInfo paramLI = NULL;
 
 	Assert(px_role == PX_ROLE_PX);
-
+	allow_px_insert_into_matview();
 	/*
 	 * If we didn't get passed a query string, dummy something up for ps display and pg_stat_activity
 	 */

@@ -59,6 +59,7 @@ typedef struct
 } DR_transientrel;
 
 static int	matview_maintenance_depth = 0;
+static bool px_matview_insert = false;
 
 static void transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool transientrel_receive(TupleTableSlot *slot, DestReceiver *self);
@@ -936,4 +937,14 @@ CloseMatViewIncrementalMaintenance(void)
 {
 	matview_maintenance_depth--;
 	Assert(matview_maintenance_depth >= 0);
+}
+
+bool can_px_insert_into_matview(void)
+{
+	return px_matview_insert;
+}
+
+void allow_px_insert_into_matview(void)
+{
+	px_matview_insert = true;
 }

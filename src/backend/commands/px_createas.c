@@ -40,7 +40,7 @@ static ObjectAddress
 create_empty_table_internal(List *attrList, IntoClause *into)
 {
 	CreateStmt *create = makeNode(CreateStmt);
-	char relkind = RELKIND_RELATION;
+	char relkind = RELKIND_MATVIEW;
 	Datum toast_options;
 	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 	ObjectAddress intoRelationAddr;
@@ -450,9 +450,9 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		StringInfo select_clause = makeStringInfo();
 		char *start = " as ";
 		char *relname = into->rel->relname;
-		// int ret;
-		// SPIPlanPtr plan;
-		// Portal portal;
+		int ret;
+		SPIPlanPtr plan;
+		Portal portal;
 
 		elog(INFO, "polar_enable_px: %d, polar_px_enable_insert_select: %d", polar_enable_px, px_enable_insert_select);
 
@@ -460,6 +460,8 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 
 		/* create an empty table */
 		address = create_empty_table(query->targetList, into);
+		CommitTransactionCommand();
+		StartTransactionCommand();
 
 		/* make up a SQL statement */
 		sql = makeStringInfo();
@@ -478,25 +480,21 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		appendStringInfo(sql, "insert into %s %s", relname, select_clause->data);
 		elog(INFO, "sql: %s", sql->data);
 
-		// /* invoke SPI */
-		// if ((ret = SPI_connect()) < 0)
-		// 	elog(ERROR, "px_create_table_as (%s): SPI_connect returned %d", relname, ret);
+		/* invoke SPI */
+		if ((ret = SPI_connect()) < 0)
+			elog(ERROR, "px_create_table_as (%s): SPI_connect returned %d", relname, ret);
 
-		// if ((plan = SPI_prepare_px(sql->data, 0, NULL)) == NULL)
-		// 	elog(ERROR, "SPI_prepare(\"%s\") failed", sql->data);
-
-		// if ((portal = SPI_cursor_open(NULL, plan, NULL, NULL, true)) == NULL)
-		// 	elog(ERROR, "SPI_cursor_open(\"%s\") failed", sql->data);
-
-		// elog_node_display(LOG, "plan", linitial_node(PlannedStmt, plan->plancache_list), Debug_pretty_print);
-
-		// SPI_execute_plan(plan, NULL, NULL, false, 0);
-
-		// if ((ret = SPI_execute(sql->data, false, 0)) < 0)
+		// if ((ret = SPI_execute("CREATE MATERIALIZED VIEW mv AS SELECT * FROM test", false, 0)) < 0)
 		// 	elog(ERROR, "px_create_table_as (%s): SPI_execute returned %d", relname, ret);
 
-		// SPI_finish();
-		executeSQL(sql->data);
+		if ((plan = SPI_prepare_px(sql->data, 0, NULL)) == NULL)
+			elog(ERROR, "SPI_prepare(\"%s\") failed", sql->data);
+
+		if ((ret = SPI_execute_plan(plan, NULL, NULL, false, 0)) < 0)
+			elog(ERROR, "SPI_execute_plan(\"%s\") failed", sql->data);
+
+		SPI_finish();
+		// executeSQL(sql->data);
 
 		// finish_xact_command();
 	}
