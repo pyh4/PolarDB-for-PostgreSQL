@@ -379,6 +379,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	QueryDesc  *queryDesc;
 	Query	   *copied_query;
 	uint64		processed;
+	int cursorOptions = 0;
 
 	/* Lock and rewrite, using a copy to preserve the original query. */
 	copied_query = copyObject(query);
@@ -393,8 +394,11 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	/* Check for user-requested abort. */
 	CHECK_FOR_INTERRUPTS();
 
+	if (px_enable_create_table_as)
+		cursorOptions |= CURSOR_OPT_PX_OK;
+
 	/* Plan the query which will generate data for the refresh. */
-	plan = pg_plan_query(query, 0, NULL);
+	plan = pg_plan_query(query, cursorOptions, NULL);
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
