@@ -453,13 +453,20 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		int ret;
 		SPIPlanPtr plan;
 		Portal portal;
+		Relation	intoRelationDesc;
 
 		elog(INFO, "polar_enable_px: %d, polar_px_enable_insert_select: %d", polar_enable_px, px_enable_insert_select);
-
 		elog(INFO, "relname: %s", relname);
 
 		/* create an empty table */
 		address = create_empty_table(query->targetList, into);
+
+		/* mark new materialized view as populated */
+		intoRelationDesc = heap_open(address.objectId, AccessExclusiveLock);
+		SetMatViewPopulatedState(intoRelationDesc, true);
+		heap_close(intoRelationDesc, NoLock);
+
+		/* commit transaction to make new materialized view visible to woking processes */
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
