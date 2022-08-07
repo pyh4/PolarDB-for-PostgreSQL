@@ -3987,6 +3987,7 @@ _outQueryDispatchDesc(StringInfo str, const QueryDispatchDesc *node)
 	WRITE_NODE_FIELD(sliceTable);
 	WRITE_NODE_FIELD(cursorPositions);
 	WRITE_BOOL_FIELD(useChangedAOOpts);
+	WRITE_BOOL_FIELD(insertIntoMatview);
 }
 
 static void

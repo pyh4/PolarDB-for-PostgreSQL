@@ -2762,6 +2762,7 @@ _readQueryDispatchDesc(void)
 	READ_NODE_FIELD(sliceTable);
 	READ_NODE_FIELD(cursorPositions);
 	READ_BOOL_FIELD(useChangedAOOpts);
+	READ_BOOL_FIELD(insertIntoMatview);
 	READ_DONE();
 }
 

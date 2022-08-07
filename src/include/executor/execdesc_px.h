@@ -170,6 +170,12 @@ typedef struct QueryDispatchDesc
 	 * set, use default reloptions + gp_default_storage_options.
 	 */
 	bool useChangedAOOpts;
+
+	/*
+	 * Set to true if the working process is created for CREATE MATERIALIZED VIEW
+	 * execution and is allowed to directly insert tuples into a materialized view.
+	 */
+	bool insertIntoMatview;
 } QueryDispatchDesc;
 
 #endif							/* EXECDESC_PX_H  */

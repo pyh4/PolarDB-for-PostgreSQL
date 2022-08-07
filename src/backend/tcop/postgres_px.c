@@ -59,7 +59,6 @@ exec_px_query(const char *query_string,
 	ParamListInfo paramLI = NULL;
 
 	Assert(px_role == PX_ROLE_PX);
-	allow_px_insert_into_matview();
 	/*
 	 * If we didn't get passed a query string, dummy something up for ps display and pg_stat_activity
 	 */
@@ -169,6 +168,8 @@ exec_px_query(const char *query_string,
 			PxIdentity.workerid = px_logical_worker_idx;
 			PxIdentity.dbid = px_logical_worker_idx;
 		}
+
+		set_px_insert_into_matview(ddesc->insertIntoMatview);
     }
 
 	elog((px_enable_print ? LOG : DEBUG1),

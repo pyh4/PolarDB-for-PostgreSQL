@@ -83,16 +83,23 @@ create_empty_table_internal(List *attrList, IntoClause *into)
 
 	NewRelationCreateToastTable(intoRelationAddr.objectId, toast_options);
 
+	/* Create the "view" part of a materialized view. */
+	/* StoreViewQuery scribbles on tree, so make a copy */
+	Query	   *query = (Query *) copyObject(into->viewQuery);
+
+	StoreViewQuery(intoRelationAddr.objectId, query, false);
+	CommandCounterIncrement();
+
 	return intoRelationAddr;
 }
 
 /*
- * create_empty_table
+ * create_empty_matview
  *
- * Create an empty table.
+ * Create an empty materialized view.
  */
 static ObjectAddress
-create_empty_table(List *tlist, IntoClause *into)
+create_empty_matview(List *tlist, IntoClause *into)
 {
 	List *attrList;
 	ListCell *t, *lc;
@@ -176,7 +183,7 @@ void executeSQL(const char *sql)
 		int16 format;
 
 		/* POLAR px: begin */
-		/* reset false every time*/
+		/* reset false every time */
 		px_use_global_function = false;
 		px_is_planning = false;
 		px_is_executing = false;
@@ -224,7 +231,7 @@ void executeSQL(const char *sql)
 		// 	PushActiveSnapshot(GetTransactionSnapshot());
 		// 	snapshot_set = true;
 		// }
-		PushActiveSnapshot(GetTransactionSnapshot());
+		// PushActiveSnapshot(GetTransactionSnapshot());
 
 		/*
 		 * OK to analyze, rewrite, and plan this query.
@@ -242,7 +249,7 @@ void executeSQL(const char *sql)
 
 		// /* Done with the snapshot used for parsing/planning */
 		// if (snapshot_set)
-		PopActiveSnapshot();
+		// PopActiveSnapshot();
 
 		/* If we got a cancel signal in analysis or planning, quit */
 		CHECK_FOR_INTERRUPTS();
@@ -374,8 +381,6 @@ void executeSQL(const char *sql)
 ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
 								 ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag)
 {
-	elog(INFO, "inside px_create_table_as");
-
 	Query *query = castNode(Query, stmt->query);
 	IntoClause *into = stmt->into;
 	bool is_matview = (into->viewQuery != NULL);
@@ -388,8 +393,6 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 	PlannedStmt *plan;
 	QueryDesc *queryDesc;
 	StringInfo sql;
-
-	allow_px_insert_into_matview();
 
 	if (stmt->if_not_exists)
 	{
@@ -448,38 +451,38 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		 * 3. modify metadata to make it behave exactly like a matview
 		 */
 		StringInfo select_clause = makeStringInfo();
-		char *start = " as ";
+		char *as_clause = " as ";
 		char *relname = into->rel->relname;
 		int ret;
 		SPIPlanPtr plan;
 		Portal portal;
 		Relation	intoRelationDesc;
 
-		elog(INFO, "polar_enable_px: %d, polar_px_enable_insert_select: %d", polar_enable_px, px_enable_insert_select);
-		elog(INFO, "relname: %s", relname);
+		set_px_insert_into_matview(true);
+		px_enable_insert_select = true;
+		polar_enable_px = true;
 
-		/* create an empty table */
-		address = create_empty_table(query->targetList, into);
+		/* create an empty materialized view */
+		address = create_empty_matview(query->targetList, into);
 
-		/* mark new materialized view as populated */
+		/* mark the new materialized view as populated */
 		intoRelationDesc = heap_open(address.objectId, AccessExclusiveLock);
 		SetMatViewPopulatedState(intoRelationDesc, true);
 		heap_close(intoRelationDesc, NoLock);
 
-		/* commit transaction to make new materialized view visible to woking processes */
+		/* commit transaction to make the new materialized view visible to woking processes */
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
-		/* make up a SQL statement */
+		/* assemble a SQL statement */
 		sql = makeStringInfo();
 
 		/* extract select clause from the original SQL */
 		for (int i = 0; i < strlen(queryString) - 4; i++)
 		{
-			if (strncmp(queryString + i, start, 4) == 0)
+			if (strncmp(queryString + i, as_clause, 4) == 0)
 			{
 				appendStringInfo(select_clause, queryString + i + 4);
-				elog(INFO, "select_clause: %s", select_clause->data);
 				break;
 			}
 		}
@@ -487,23 +490,9 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		appendStringInfo(sql, "insert into %s %s", relname, select_clause->data);
 		elog(INFO, "sql: %s", sql->data);
 
-		/* invoke SPI */
-		if ((ret = SPI_connect()) < 0)
-			elog(ERROR, "px_create_table_as (%s): SPI_connect returned %d", relname, ret);
+		executeSQL(sql->data);
 
-		// if ((ret = SPI_execute("CREATE MATERIALIZED VIEW mv AS SELECT * FROM test", false, 0)) < 0)
-		// 	elog(ERROR, "px_create_table_as (%s): SPI_execute returned %d", relname, ret);
-
-		if ((plan = SPI_prepare_px(sql->data, 0, NULL)) == NULL)
-			elog(ERROR, "SPI_prepare(\"%s\") failed", sql->data);
-
-		if ((ret = SPI_execute_plan(plan, NULL, NULL, false, 0)) < 0)
-			elog(ERROR, "SPI_execute_plan(\"%s\") failed", sql->data);
-
-		SPI_finish();
-		// executeSQL(sql->data);
-
-		// finish_xact_command();
+		set_px_insert_into_matview(false);
 	}
 
 	if (is_matview)
