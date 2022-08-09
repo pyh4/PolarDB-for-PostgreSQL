@@ -245,7 +245,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 
 	if (is_matview && px_enable_create_matview)
 	{
-		return px_create_table_as(stmt, queryString, params, queryEnv, completionTag);
+		return px_create_matview(stmt, queryString, params, queryEnv, completionTag);
 	}
 
 

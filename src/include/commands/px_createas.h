@@ -9,20 +9,20 @@
 
 #ifdef USE_PX
 
-extern ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
+extern ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString,
                                         ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag);
 
 #else
 
 static ObjectAddress
-px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
+px_create_matview(CreateTableAsStmt *stmt, const char *queryString,
                    ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag);
 
 static ObjectAddress
-px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
+px_create_matview(CreateTableAsStmt *stmt, const char *queryString,
                    ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag)
 {
-    elog(ERROR, "not support PX create table as in non-px mode");
+    elog(ERROR, "not support PX create materialized view as in non-px mode");
     return InvalidObjectAddress;
 }
 

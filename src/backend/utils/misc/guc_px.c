@@ -1668,8 +1668,8 @@ struct config_bool ConfigureNamesBool_px[] =
 	},
 
 	{
-		{"polar_px_enable_create_table_as", PGC_SIGHUP, UNGROUPED,
-			gettext_noop("Polar PX enable create table as"),
+		{"polar_px_enable_create_matview", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Polar PX enable create materialized view as"),
 			NULL,
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},

@@ -30,8 +30,11 @@
 #include "access/printtup.h"
 #include "parser/analyze.h"
 #include "utils/ps_status.h"
+#include "tcop/utility.h"
 
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
+
+static void executeSQL(const char *sql);
 
 /*
  * create_empty_matview_internal
@@ -47,6 +50,7 @@ create_empty_matview_internal(List *attrList, IntoClause *into)
 	Datum toast_options;
 	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 	ObjectAddress intoRelationAddr;
+	Query *query;
 
 	/*
 	 * Create the target relation by faking up a CREATE TABLE parsetree and
@@ -88,7 +92,7 @@ create_empty_matview_internal(List *attrList, IntoClause *into)
 
 	/* Create the "view" part of a materialized view. */
 	/* StoreViewQuery scribbles on tree, so make a copy */
-	Query *query = (Query *)copyObject(into->viewQuery);
+	query = (Query *)copyObject(into->viewQuery);
 	StoreViewQuery(intoRelationAddr.objectId, query, false);
 	CommandCounterIncrement();
 
@@ -115,7 +119,7 @@ IsTransactionExitStmt(Node *parsetree)
 {
 	if (parsetree && IsA(parsetree, TransactionStmt))
 	{
-		TransactionStmt *stmt = (TransactionStmt *) parsetree;
+		TransactionStmt *stmt = (TransactionStmt *)parsetree;
 
 		if (stmt->kind == TRANS_STMT_COMMIT ||
 			stmt->kind == TRANS_STMT_PREPARE ||
@@ -139,7 +143,7 @@ create_empty_matview(List *tlist, IntoClause *into)
 
 	/*
 	 * Build list of ColumnDefs from non-junk elements of the tlist.  If a
-	 * column name list was specified in CREATE TABLE AS, override the column
+	 * column name list was specified in CREATE MATERIALIZED AS, override the column
 	 * names in the query.  (Too few column names are OK, too many are not.)
 	 */
 	attrList = NIL;
@@ -200,7 +204,6 @@ void executeSQL(const char *sql)
 	List *parsetree_list;
 	ListCell *parsetree_item;
 	MemoryContext oldcontext;
-	bool use_implicit_block;
 
 	parsetree_list = pg_parse_query(sql);
 
@@ -284,10 +287,7 @@ void executeSQL(const char *sql)
 		/* If we got a cancel signal in analysis or planning, quit */
 		CHECK_FOR_INTERRUPTS();
 
-		/*
-		 * Create unnamed portal to run the query or queries in. If there
-		 * already is one, silently drop it.
-		 */
+		/* Create portal to run the query or queries in. */
 		portal = CreatePortal("matview_insert_select", true, true);
 		/* Don't display the portal in pg_cursors */
 		portal->visible = false;
@@ -380,8 +380,8 @@ void executeSQL(const char *sql)
 	}
 }
 
-ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
-								 ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag)
+ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString,
+								ParamListInfo params, QueryEnvironment *queryEnv, char *completionTag)
 {
 	Query *query = castNode(Query, stmt->query);
 	IntoClause *into = stmt->into;
@@ -411,7 +411,7 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 	if (query->commandType == CMD_UTILITY &&
 		IsA(query->utilityStmt, ExecuteStmt))
 	{
-		elog(ERROR, "px_create_table_as does not support EXECUTE statement");
+		elog(ERROR, "px_create_matview does not support EXECUTE statement");
 		return InvalidObjectAddress;
 	}
 	Assert(query->commandType == CMD_SELECT);
@@ -423,13 +423,10 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 	 * REFRESH MATERIALIZED VIEW.  Otherwise, one could create a materialized
 	 * view not possible to refresh.
 	 */
-	if (is_matview)
-	{
-		GetUserIdAndSecContext(&save_userid, &save_sec_context);
-		SetUserIdAndSecContext(save_userid,
-							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
-		save_nestlevel = NewGUCNestLevel();
-	}
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	SetUserIdAndSecContext(save_userid,
+						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+	save_nestlevel = NewGUCNestLevel();
 
 	if (into->skipData)
 	{
@@ -452,10 +449,11 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		char *as_clause = " as ";
 		char *relname = into->rel->relname;
 		Relation intoRelationDesc;
+		bool old_px_enable_insert_select = px_enable_insert_select;
 
 		set_px_insert_into_matview(true);
+		// TODO(pengyonghui): what if polar_enable_px is off?
 		px_enable_insert_select = true;
-		polar_enable_px = true;
 
 		/* create an empty materialized view */
 		address = create_empty_matview(query->targetList, into);
@@ -469,35 +467,24 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
-		/* assemble a SQL statement */
+		/* temporary solution: assemble a SQL statement */
 		sql = makeStringInfo();
-
 		/* extract select clause from the original SQL */
-		for (int i = 0; i < strlen(queryString) - 4; i++)
-		{
-			if (strncmp(queryString + i, as_clause, 4) == 0)
-			{
-				appendStringInfo(select_clause, "%s", queryString + i + 4);
-				break;
-			}
-		}
-
+		appendStringInfo(select_clause, "%s", strstr(queryString, " as ") + 4);
 		appendStringInfo(sql, "insert into %s %s", relname, select_clause->data);
 		elog(INFO, "sql: %s", sql->data);
 
 		executeSQL(sql->data);
 
+		px_enable_insert_select = old_px_enable_insert_select;
 		set_px_insert_into_matview(false);
 	}
 
-	if (is_matview)
-	{
-		/* Roll back any GUC changes */
-		AtEOXact_GUC(false, save_nestlevel);
+	/* Roll back any GUC changes */
+	AtEOXact_GUC(false, save_nestlevel);
 
-		/* Restore userid and security context */
-		SetUserIdAndSecContext(save_userid, save_sec_context);
-	}
+	/* Restore userid and security context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
 
 	return address;
 }
