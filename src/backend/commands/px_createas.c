@@ -452,7 +452,7 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 		bool old_px_enable_insert_select = px_enable_insert_select;
 
 		set_px_insert_into_matview(true);
-		// TODO(pengyonghui): what if polar_enable_px is off?
+		/* TODO(pengyonghui): what if polar_enable_px is off?: refer to insert...select... */
 		px_enable_insert_select = true;
 
 		/* create an empty materialized view */
@@ -464,10 +464,13 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 		heap_close(intoRelationDesc, NoLock);
 
 		/* commit transaction to make the new materialized view visible to woking processes */
+		/* pop snapshot that is saved in PortalRunUtility */
+		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
 		/* temporary solution: assemble a SQL statement */
+		/* TODO(pengyonghui): handle upper/lower case */
 		sql = makeStringInfo();
 		/* extract select clause from the original SQL */
 		appendStringInfo(select_clause, "%s", strstr(queryString, " as ") + 4);
