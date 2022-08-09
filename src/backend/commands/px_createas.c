@@ -26,18 +26,21 @@
 #include "executor/spi.h"
 #include "executor/spi_priv.h"
 #include "nodes/pg_list.h"
+#include "tcop/pquery.h"
+#include "access/printtup.h"
+#include "parser/analyze.h"
+#include "utils/ps_status.h"
 
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
 
 /*
- * create_ctas_internal
+ * create_empty_matview_internal
  *
- * Internal utility used for the creation of the definition of a relation
- * created via CREATE TABLE AS or a materialized view.  Caller needs to
- * provide a list of attributes (ColumnDef nodes).
+ * Internal utility used for the creation of the definition of a materialized view.
+ * Caller needs to provide a list of attributes (ColumnDef nodes).
  */
 static ObjectAddress
-create_empty_table_internal(List *attrList, IntoClause *into)
+create_empty_matview_internal(List *attrList, IntoClause *into)
 {
 	CreateStmt *create = makeNode(CreateStmt);
 	char relkind = RELKIND_MATVIEW;
@@ -85,12 +88,42 @@ create_empty_table_internal(List *attrList, IntoClause *into)
 
 	/* Create the "view" part of a materialized view. */
 	/* StoreViewQuery scribbles on tree, so make a copy */
-	Query	   *query = (Query *) copyObject(into->viewQuery);
-
+	Query *query = (Query *)copyObject(into->viewQuery);
 	StoreViewQuery(intoRelationAddr.objectId, query, false);
 	CommandCounterIncrement();
 
 	return intoRelationAddr;
+}
+
+/*
+ * errdetail_abort
+ *
+ * Add an errdetail() line showing abort reason, if any.
+ */
+static int
+errdetail_abort(void)
+{
+	if (MyProc->recoveryConflictPending)
+		errdetail("abort reason: recovery conflict");
+
+	return 0;
+}
+
+/* Test a bare parsetree */
+static bool
+IsTransactionExitStmt(Node *parsetree)
+{
+	if (parsetree && IsA(parsetree, TransactionStmt))
+	{
+		TransactionStmt *stmt = (TransactionStmt *) parsetree;
+
+		if (stmt->kind == TRANS_STMT_COMMIT ||
+			stmt->kind == TRANS_STMT_PREPARE ||
+			stmt->kind == TRANS_STMT_ROLLBACK ||
+			stmt->kind == TRANS_STMT_ROLLBACK_TO)
+			return true;
+	}
+	return false;
 }
 
 /*
@@ -158,7 +191,7 @@ create_empty_matview(List *tlist, IntoClause *into)
 				 errmsg("too many column names were specified")));
 
 	/* Create the relation definition using the ColumnDef list */
-	return create_empty_table_internal(attrList, into);
+	return create_empty_matview_internal(attrList, into);
 }
 
 void executeSQL(const char *sql)
@@ -167,6 +200,7 @@ void executeSQL(const char *sql)
 	List *parsetree_list;
 	ListCell *parsetree_item;
 	MemoryContext oldcontext;
+	bool use_implicit_block;
 
 	parsetree_list = pg_parse_query(sql);
 
@@ -201,24 +235,21 @@ void executeSQL(const char *sql)
 
 		BeginCommand(commandTag, dest);
 
-		// /*
-		//  * If we are in an aborted transaction, reject all commands except
-		//  * COMMIT/ABORT.  It is important that this test occur before we try
-		//  * to do parse analysis, rewrite, or planning, since all those phases
-		//  * try to do database accesses, which may fail in abort state. (It
-		//  * might be safe to allow some additional utility commands in this
-		//  * state, but not many...)
-		//  */
-		// if (IsAbortedTransactionBlockState() &&
-		// 	!IsTransactionExitStmt(parsetree->stmt))
-		// 	ereport(ERROR,
-		// 			(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
-		// 			 errmsg("current transaction is aborted, "
-		// 					"commands ignored until end of transaction block"),
-		// 			 errdetail_abort()));
-
-		/* Make sure we are in a transaction command */
-		// start_xact_command();
+		/*
+		 * If we are in an aborted transaction, reject all commands except
+		 * COMMIT/ABORT.  It is important that this test occur before we try
+		 * to do parse analysis, rewrite, or planning, since all those phases
+		 * try to do database accesses, which may fail in abort state. (It
+		 * might be safe to allow some additional utility commands in this
+		 * state, but not many...)
+		 */
+		if (IsAbortedTransactionBlockState() &&
+			!IsTransactionExitStmt(parsetree->stmt))
+			ereport(ERROR,
+					(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
+					 errmsg("current transaction is aborted, "
+							"commands ignored until end of transaction block"),
+					 errdetail_abort()));
 
 		/* If we got a cancel signal in parsing or prior command, quit */
 		CHECK_FOR_INTERRUPTS();
@@ -226,12 +257,11 @@ void executeSQL(const char *sql)
 		/*
 		 * Set up a snapshot if parse analysis/planning will need one.
 		 */
-		// if (analyze_requires_snapshot(parsetree))
-		// {
-		// 	PushActiveSnapshot(GetTransactionSnapshot());
-		// 	snapshot_set = true;
-		// }
-		// PushActiveSnapshot(GetTransactionSnapshot());
+		if (analyze_requires_snapshot(parsetree))
+		{
+			PushActiveSnapshot(GetTransactionSnapshot());
+			snapshot_set = true;
+		}
 
 		/*
 		 * OK to analyze, rewrite, and plan this query.
@@ -247,9 +277,9 @@ void executeSQL(const char *sql)
 		plantree_list = pg_plan_queries(querytree_list,
 										CURSOR_OPT_PARALLEL_OK | CURSOR_OPT_PX_OK, NULL);
 
-		// /* Done with the snapshot used for parsing/planning */
-		// if (snapshot_set)
-		// PopActiveSnapshot();
+		/* Done with the snapshot used for parsing/planning */
+		if (snapshot_set)
+			PopActiveSnapshot();
 
 		/* If we got a cancel signal in analysis or planning, quit */
 		CHECK_FOR_INTERRUPTS();
@@ -333,49 +363,21 @@ void executeSQL(const char *sql)
 		receiver->rDestroy(receiver);
 
 		PortalDrop(portal, false);
+
+		/*
+		 * We need a CommandCounterIncrement after every query, except
+		 * those that start or end a transaction block.
+		 */
+		CommandCounterIncrement();
+
+		/*
+		 * Tell client that we're done with this query.  Note we emit exactly
+		 * one EndCommand report for each raw parsetree, thus one for each SQL
+		 * command the client sent, regardless of rewriting. (But a command
+		 * aborted by error will not send an EndCommand report at all.)
+		 */
+		EndCommand(completionTag, dest);
 	}
-
-	// if (lnext(parsetree_item) == NULL)
-	// {
-	// 	/*
-	// 	 * If this is the last parsetree of the query string, close down
-	// 	 * transaction statement before reporting command-complete.  This
-	// 	 * is so that any end-of-transaction errors are reported before
-	// 	 * the command-complete message is issued, to avoid confusing
-	// 	 * clients who will expect either a command-complete message or an
-	// 	 * error, not one and then the other.  Also, if we're using an
-	// 	 * implicit transaction block, we must close that out first.
-	// 	 */
-	// 	if (use_implicit_block)
-	// 		EndImplicitTransactionBlock();
-	// 	finish_xact_command();
-	// }
-	// else if (IsA(parsetree->stmt, TransactionStmt))
-	// {
-	// 	/*
-	// 	 * If this was a transaction control statement, commit it. We will
-	// 	 * start a new xact command for the next command.
-	// 	 */
-	// 	finish_xact_command();
-	// }
-	// else
-	// {
-	// 	/*
-	// 	 * We need a CommandCounterIncrement after every query, except
-	// 	 * those that start or end a transaction block.
-	// 	 */
-	// 	CommandCounterIncrement();
-	// }
-
-	/*
-	 * Tell client that we're done with this query.  Note we emit exactly
-	 * one EndCommand report for each raw parsetree, thus one for each SQL
-	 * command the client sent, regardless of rewriting. (But a command
-	 * aborted by error will not send an EndCommand report at all.)
-	 */
-	// EndCommand(completionTag, dest);
-
-	/* modify table to make it a materialized view: relkind, finish the view part...  */
 }
 
 ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryString,
@@ -384,14 +386,10 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 	Query *query = castNode(Query, stmt->query);
 	IntoClause *into = stmt->into;
 	bool is_matview = (into->viewQuery != NULL);
-	DestReceiver *dest;
 	Oid save_userid = InvalidOid;
 	int save_sec_context = 0;
 	int save_nestlevel = 0;
 	ObjectAddress address;
-	List *rewritten;
-	PlannedStmt *plan;
-	QueryDesc *queryDesc;
 	StringInfo sql;
 
 	if (stmt->if_not_exists)
@@ -453,10 +451,7 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		StringInfo select_clause = makeStringInfo();
 		char *as_clause = " as ";
 		char *relname = into->rel->relname;
-		int ret;
-		SPIPlanPtr plan;
-		Portal portal;
-		Relation	intoRelationDesc;
+		Relation intoRelationDesc;
 
 		set_px_insert_into_matview(true);
 		px_enable_insert_select = true;
@@ -482,7 +477,7 @@ ObjectAddress px_create_table_as(CreateTableAsStmt *stmt, const char *queryStrin
 		{
 			if (strncmp(queryString + i, as_clause, 4) == 0)
 			{
-				appendStringInfo(select_clause, queryString + i + 4);
+				appendStringInfo(select_clause, "%s", queryString + i + 4);
 				break;
 			}
 		}

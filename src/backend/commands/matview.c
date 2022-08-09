@@ -944,11 +944,6 @@ bool can_px_insert_into_matview(void)
 	return px_matview_insert;
 }
 
-void allow_px_insert_into_matview(void)
-{
-	px_matview_insert = true;
-}
-
 void set_px_insert_into_matview(bool allow)
 {
 	px_matview_insert = allow;
