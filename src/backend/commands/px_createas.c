@@ -1,5 +1,4 @@
 #include "postgres.h"
-
 #include "access/reloptions.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
@@ -390,7 +389,13 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 	int save_sec_context = 0;
 	int save_nestlevel = 0;
 	ObjectAddress address;
+	StringInfo query_string_lower;
 	StringInfo sql;
+	StringInfo select_clause;
+	char *as_clause = " as ";
+	char *relname = into->rel->relname;
+	Relation intoRelationDesc;
+	bool old_px_enable_insert_select;
 
 	if (stmt->if_not_exists)
 	{
@@ -445,14 +450,20 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 		 * 2. fire up an INSERT INTO ... SELECT ... command to insert tuples into it
 		 * 3. modify metadata to make it behave exactly like a matview
 		 */
-		StringInfo select_clause = makeStringInfo();
-		char *as_clause = " as ";
-		char *relname = into->rel->relname;
-		Relation intoRelationDesc;
-		bool old_px_enable_insert_select = px_enable_insert_select;
+
+		/* transform query string to lower case */
+		query_string_lower = makeStringInfo();
+		for (int i = 0; i < strlen(queryString); i++)
+		{
+			char c = queryString[i];
+			if (c >= 'A' && c <= 'Z')
+				appendStringInfoChar(query_string_lower, c - 'A' + 'a');
+			else 
+				appendStringInfoChar(query_string_lower, c);
+		}
 
 		set_px_insert_into_matview(true);
-		/* TODO(pengyonghui): what if polar_enable_px is off?: refer to insert...select... */
+		old_px_enable_insert_select = px_enable_insert_select;
 		px_enable_insert_select = true;
 
 		/* create an empty materialized view */
@@ -464,17 +475,19 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 		heap_close(intoRelationDesc, NoLock);
 
 		/* commit transaction to make the new materialized view visible to woking processes */
-		/* pop snapshot that is saved in PortalRunUtility */
+		/* pop snapshot that is saved in PortalRunUtility first */
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
 		/* temporary solution: assemble a SQL statement */
-		/* TODO(pengyonghui): handle upper/lower case */
 		sql = makeStringInfo();
 		/* extract select clause from the original SQL */
-		appendStringInfo(select_clause, "%s", strstr(queryString, " as ") + 4);
+		select_clause = makeStringInfo();
+		appendStringInfo(select_clause, "%s", strstr(query_string_lower->data, " as ") + 4);
+
 		appendStringInfo(sql, "insert into %s %s", relname, select_clause->data);
+
 		elog(INFO, "sql: %s", sql->data);
 
 		executeSQL(sql->data);
