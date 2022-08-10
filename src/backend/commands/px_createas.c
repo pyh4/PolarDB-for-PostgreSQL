@@ -32,7 +32,7 @@
 #include "tcop/utility.h"
 
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
-static int	errdetail_abort(void);
+static int errdetail_abort(void);
 static void executeSQL(const char *sql);
 static bool IsTransactionExitStmt(Node *parsetree);
 static ObjectAddress create_empty_matview(List *tlist, IntoClause *into);
@@ -207,7 +207,14 @@ static void executeSQL(const char *sql)
 	ListCell *parsetree_item;
 	MemoryContext oldcontext;
 
+	/*
+	 * Switch to appropriate context for constructing parsetrees.
+	 */
+	oldcontext = MemoryContextSwitchTo(MessageContext);
+
 	parsetree_list = pg_parse_query(sql);
+
+	MemoryContextSwitchTo(oldcontext);
 
 	foreach (parsetree_item, parsetree_list)
 	{
@@ -455,7 +462,7 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 			char c = queryString[i];
 			if (c >= 'A' && c <= 'Z')
 				appendStringInfoChar(query_string_lower, c - 'A' + 'a');
-			else 
+			else
 				appendStringInfoChar(query_string_lower, c);
 		}
 
@@ -491,6 +498,10 @@ ObjectAddress px_create_matview(CreateTableAsStmt *stmt, const char *queryString
 
 		px_enable_insert_select = old_px_enable_insert_select;
 		set_px_insert_into_matview(false);
+
+		pfree(query_string_lower);
+		pfree(select_clause);
+		pfree(sql);
 	}
 
 	/* Roll back any GUC changes */

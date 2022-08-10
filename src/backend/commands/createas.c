@@ -248,7 +248,6 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		return px_create_matview(stmt, queryString, params, queryEnv, completionTag);
 	}
 
-
 	if (stmt->if_not_exists)
 	{
 		Oid			nspid;
