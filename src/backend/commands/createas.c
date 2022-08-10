@@ -243,7 +243,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
 
-	if (is_matview && px_enable_create_matview)
+	if (is_matview && px_enable_create_matview && !IsTransactionBlock())
 	{
 		return px_create_matview(stmt, queryString, params, queryEnv, completionTag);
 	}
