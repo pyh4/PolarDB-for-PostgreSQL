@@ -1304,7 +1304,7 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 			}
 			break;
 		case RELKIND_MATVIEW:
-			if (!MatViewIncrementalMaintenanceIsEnabled())
+			if (!MatViewIncrementalMaintenanceIsEnabled() && !can_px_insert_into_matview())
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 						 errmsg("cannot change materialized view \"%s\"",

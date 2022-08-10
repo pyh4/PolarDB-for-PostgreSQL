@@ -187,6 +187,8 @@ standard_ExecutorStart_PX(QueryDesc *queryDesc, int eflags)
 				queryDesc->ddesc->useChangedAOOpts = true;
 			}
 
+			queryDesc->ddesc->insertIntoMatview = can_px_insert_into_matview();
+
 			/* Pass EXPLAIN ANALYZE flag to qExecs. */
 			estate->es_sliceTable->instrument_options = queryDesc->instrument_options;
 

@@ -49,6 +49,12 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
+/* POLAR px */
+#include "commands/px_createas.h"
+#ifdef USE_PX
+#include "px_createas.c"
+#endif
+
 
 typedef struct
 {
@@ -238,6 +244,10 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	QueryDesc  *queryDesc;
 	int cursorOptions = CURSOR_OPT_PARALLEL_OK;
 
+	if (is_matview && px_enable_create_matview && !IsTransactionBlock())
+	{
+		return px_create_matview(stmt, queryString, params, queryEnv, completionTag);
+	}
 
 	if (stmt->if_not_exists)
 	{

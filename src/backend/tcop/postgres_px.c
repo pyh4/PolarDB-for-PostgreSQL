@@ -24,6 +24,8 @@
 
 /* POLAR px */
 
+void set_px_insert_into_matview(bool allow);
+
 /*
  * exec_px_query
  *
@@ -170,6 +172,8 @@ exec_px_query(const char *query_string,
 			PxIdentity.dbid = px_logical_worker_idx;
 		}
     }
+
+	set_px_insert_into_matview(ddesc->insertIntoMatview);
 
 	elog((px_enable_print ? LOG : DEBUG1),
 		"begin exec px query on node: local address %s, listen port %d, sessid %d, trace_id %ld, px_worker_id %d", 

@@ -30,4 +30,8 @@ extern DestReceiver *CreateTransientRelDestReceiver(Oid oid);
 
 extern bool MatViewIncrementalMaintenanceIsEnabled(void);
 
+extern bool can_px_insert_into_matview(void);
+
+extern void set_px_insert_into_matview(bool allow);
+
 #endif							/* MATVIEW_H */
