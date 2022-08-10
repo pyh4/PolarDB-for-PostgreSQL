@@ -24,6 +24,8 @@
 
 /* POLAR px */
 
+void set_px_insert_into_matview(bool allow);
+
 /*
  * exec_px_query
  *

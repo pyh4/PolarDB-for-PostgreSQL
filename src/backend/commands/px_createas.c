@@ -32,7 +32,10 @@
 #include "tcop/utility.h"
 
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
-
+static int	errdetail_abort(void);
+static void executeSQL(const char *sql);
+static bool IsTransactionExitStmt(Node *parsetree);
+static ObjectAddress create_empty_matview(List *tlist, IntoClause *into);
 static void executeSQL(const char *sql);
 
 /*
@@ -197,7 +200,7 @@ create_empty_matview(List *tlist, IntoClause *into)
 	return create_empty_matview_internal(attrList, into);
 }
 
-void executeSQL(const char *sql)
+static void executeSQL(const char *sql)
 {
 	CommandDest dest = whereToSendOutput;
 	List *parsetree_list;
@@ -209,7 +212,6 @@ void executeSQL(const char *sql)
 	foreach (parsetree_item, parsetree_list)
 	{
 		RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
-		bool snapshot_set = false;
 		const char *commandTag;
 		char completionTag[COMPLETION_TAG_BUFSIZE];
 		List *querytree_list,
@@ -259,11 +261,7 @@ void executeSQL(const char *sql)
 		/*
 		 * Set up a snapshot if parse analysis/planning will need one.
 		 */
-		if (analyze_requires_snapshot(parsetree))
-		{
-			PushActiveSnapshot(GetTransactionSnapshot());
-			snapshot_set = true;
-		}
+		PushActiveSnapshot(GetTransactionSnapshot());
 
 		/*
 		 * OK to analyze, rewrite, and plan this query.
@@ -280,8 +278,7 @@ void executeSQL(const char *sql)
 										CURSOR_OPT_PARALLEL_OK | CURSOR_OPT_PX_OK, NULL);
 
 		/* Done with the snapshot used for parsing/planning */
-		if (snapshot_set)
-			PopActiveSnapshot();
+		PopActiveSnapshot();
 
 		/* If we got a cancel signal in analysis or planning, quit */
 		CHECK_FOR_INTERRUPTS();
