@@ -480,7 +480,7 @@ CreateIntoRelDestReceiverBuffered(IntoClause *intoClause)
 	DR_intorel *self = (DR_intorel *) palloc0(sizeof(DR_intorel));
 
 	/*
-	 * TODO: do these checks:
+	 * TODO: check if we satisfy these conditions.
 	 * 1. there is no BEFORE/INSTEAD OF triggers;
 	 * 2. we don't need to evaluate volatile default expressions;
 	 * 3. the table is not foreign or partitioned.
@@ -874,27 +874,23 @@ intorel_receive_buffered(TupleTableSlot *slot, DestReceiver *self)
 	if (nBufferedTuples == MAX_BUFFERED_TUPLES || bufferedTuplesSize > 65535)
 	{
 		/*
-		 * heap_multi_insert leaks memory, so switch to short-lived memory context
-		 * before calling it.
+		 * heap_multi_insert leaks memory into per-query memory context.
 		 */
-		// TODO: switch context
 		heap_multi_insert(myState->rel, 
 						  bufferedTuples, 
 						  nBufferedTuples, 
 						  myState->output_cid,
 						  myState->hi_options,
 						  myState->bistate);
-		// TODO: do we need to manually free memory allocated for tuple copies?
+
 		for (int i = 0; i < nBufferedTuples; i++)
-		{
 			pfree(*(bufferedTuples + i));
-		}
+
 		nBufferedTuples = 0;
 		bufferedTuplesSize = 0;
 	}
 
 	/* We know this is a newly created relation, so there are no indexes */
-
 	return true;
 }
 
@@ -906,7 +902,7 @@ intorel_shutdown_buffered(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 
-	/* flush tuples that are still in the buffer */
+	/* flush remaining tuples that are still in the buffer */
 	if (nBufferedTuples > 0)
 	{
 		heap_multi_insert(myState->rel, 
