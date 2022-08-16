@@ -48,6 +48,7 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+#include "executor/executor.h"
 
 /* POLAR px */
 #include "commands/px_createas.h"
@@ -55,6 +56,7 @@
 #include "px_createas.c"
 #endif
 
+#define MAX_BUFFERED_TUPLES 1000
 
 typedef struct
 {
@@ -68,6 +70,10 @@ typedef struct
 	BulkInsertState bistate;	/* bulk insert state */
 } DR_intorel;
 
+static HeapTuple *bufferedTuples;
+static int nBufferedTuples;
+static Size bufferedTuplesSize = 0;
+
 /* utility functions for CTAS definition creation */
 static ObjectAddress create_ctas_internal(List *attrList, IntoClause *into);
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
@@ -77,6 +83,11 @@ static void intorel_startup(DestReceiver *self, int operation, TupleDesc typeinf
 static bool intorel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void intorel_shutdown(DestReceiver *self);
 static void intorel_destroy(DestReceiver *self);
+static DestReceiver *CreateIntoRelDestReceiverBuffered(IntoClause *intoClause);
+static void intorel_startup_buffered(DestReceiver *self, int operation, TupleDesc typeinfo);
+static bool intorel_receive_buffered(TupleTableSlot *slot, DestReceiver *self);
+static void intorel_shutdown_buffered(DestReceiver *self);
+static void intorel_destroy_buffered(DestReceiver *self);
 
 
 /*
@@ -268,7 +279,13 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	/*
 	 * Create the tuple receiver object and insert info it will need
 	 */
-	dest = CreateIntoRelDestReceiver(into);
+	if (polar_enable_matview_multi_insert)
+	{
+		dest = CreateIntoRelDestReceiverBuffered(into);
+		elog(INFO, "using buffer version of intorel");	// remove this line later
+	}
+	else
+		dest = CreateIntoRelDestReceiver(into);
 
 	/*
 	 * The contained Query could be a SELECT, or an EXECUTE utility command.
@@ -443,6 +460,35 @@ CreateIntoRelDestReceiver(IntoClause *intoClause)
 	self->pub.rStartup = intorel_startup;
 	self->pub.rShutdown = intorel_shutdown;
 	self->pub.rDestroy = intorel_destroy;
+	self->pub.mydest = DestIntoRel;
+	self->into = intoClause;
+	/* other private fields will be set during intorel_startup */
+
+	return (DestReceiver *) self;
+}
+
+/*
+ * CreateIntoRelDestReceiverBuffered -- create a suitable DestReceiver object
+ *
+ * intoClause will be NULL if called from CreateDestReceiver(), in which
+ * case it has to be provided later.  However, it is convenient to allow
+ * self->into to be filled in immediately for other callers.
+ */
+static DestReceiver *
+CreateIntoRelDestReceiverBuffered(IntoClause *intoClause)
+{
+	DR_intorel *self = (DR_intorel *) palloc0(sizeof(DR_intorel));
+
+	/*
+	 * TODO: do these checks:
+	 * 1. there is no BEFORE/INSTEAD OF triggers;
+	 * 2. we don't need to evaluate volatile default expressions;
+	 * 3. the table is not foreign or partitioned.
+	 */
+	self->pub.receiveSlot = intorel_receive_buffered;
+	self->pub.rStartup = intorel_startup_buffered;
+	self->pub.rShutdown = intorel_shutdown_buffered;
+	self->pub.rDestroy = intorel_destroy_buffered;
 	self->pub.mydest = DestIntoRel;
 	self->into = intoClause;
 	/* other private fields will be set during intorel_startup */
@@ -647,5 +693,250 @@ intorel_shutdown(DestReceiver *self)
 static void
 intorel_destroy(DestReceiver *self)
 {
+	pfree(self);
+}
+
+/*
+ * intorel_startup --- executor startup
+ */
+static void
+intorel_startup_buffered(DestReceiver *self, int operation, TupleDesc typeinfo)
+{
+	DR_intorel *myState = (DR_intorel *) self;
+	IntoClause *into = myState->into;
+	bool		is_matview;
+	char		relkind;
+	List	   *attrList;
+	ObjectAddress intoRelationAddr;
+	Relation	intoRelationDesc;
+	RangeTblEntry *rte;
+	ListCell   *lc;
+	int			attnum;
+
+	Assert(into != NULL);		/* else somebody forgot to set it */
+
+	/* This code supports both CREATE TABLE AS and CREATE MATERIALIZED VIEW */
+	is_matview = (into->viewQuery != NULL);
+	relkind = is_matview ? RELKIND_MATVIEW : RELKIND_RELATION;
+
+	/*
+	 * Build column definitions using "pre-cooked" type and collation info. If
+	 * a column name list was specified in CREATE TABLE AS, override the
+	 * column names derived from the query.  (Too few column names are OK, too
+	 * many are not.)
+	 */
+	attrList = NIL;
+	lc = list_head(into->colNames);
+	for (attnum = 0; attnum < typeinfo->natts; attnum++)
+	{
+		Form_pg_attribute attribute = TupleDescAttr(typeinfo, attnum);
+		ColumnDef  *col;
+		char	   *colname;
+
+		if (lc)
+		{
+			colname = strVal(lfirst(lc));
+			lc = lnext(lc);
+		}
+		else
+			colname = NameStr(attribute->attname);
+
+		col = makeColumnDef(colname,
+							attribute->atttypid,
+							attribute->atttypmod,
+							attribute->attcollation);
+
+		/*
+		 * It's possible that the column is of a collatable type but the
+		 * collation could not be resolved, so double-check.  (We must check
+		 * this here because DefineRelation would adopt the type's default
+		 * collation rather than complaining.)
+		 */
+		if (!OidIsValid(col->collOid) &&
+			type_is_collatable(col->typeName->typeOid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INDETERMINATE_COLLATION),
+					 errmsg("no collation was derived for column \"%s\" with collatable type %s",
+							col->colname,
+							format_type_be(col->typeName->typeOid)),
+					 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
+		attrList = lappend(attrList, col);
+	}
+
+	if (lc != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("too many column names were specified")));
+
+	/*
+	 * Actually create the target table
+	 */
+	intoRelationAddr = create_ctas_internal(attrList, into);
+
+	/*
+	 * Finally we can open the target table
+	 */
+	intoRelationDesc = heap_open(intoRelationAddr.objectId, AccessExclusiveLock);
+
+	/*
+	 * Check INSERT permission on the constructed table.
+	 *
+	 * XXX: It would arguably make sense to skip this check if into->skipData
+	 * is true.
+	 */
+	rte = makeNode(RangeTblEntry);
+	rte->rtekind = RTE_RELATION;
+	rte->relid = intoRelationAddr.objectId;
+	rte->relkind = relkind;
+	rte->requiredPerms = ACL_INSERT;
+
+	for (attnum = 1; attnum <= intoRelationDesc->rd_att->natts; attnum++)
+		rte->insertedCols = bms_add_member(rte->insertedCols,
+										   attnum - FirstLowInvalidHeapAttributeNumber);
+
+	ExecCheckRTPerms(list_make1(rte), true);
+
+	/*
+	 * Make sure the constructed table does not have RLS enabled.
+	 *
+	 * check_enable_rls() will ereport(ERROR) itself if the user has requested
+	 * something invalid, and otherwise will return RLS_ENABLED if RLS should
+	 * be enabled here.  We don't actually support that currently, so throw
+	 * our own ereport(ERROR) if that happens.
+	 */
+	if (check_enable_rls(intoRelationAddr.objectId, InvalidOid, false) == RLS_ENABLED)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 (errmsg("policies not yet implemented for this command"))));
+
+	/*
+	 * Tentatively mark the target as populated, if it's a matview and we're
+	 * going to fill it; otherwise, no change needed.
+	 */
+	if (is_matview && !into->skipData)
+		SetMatViewPopulatedState(intoRelationDesc, true);
+
+	/*
+	 * Fill private fields of myState for use by later routines
+	 */
+	myState->rel = intoRelationDesc;
+	myState->reladdr = intoRelationAddr;
+	myState->output_cid = GetCurrentCommandId(true);
+
+	/*
+	 * We can skip WAL-logging the insertions, unless PITR or streaming
+	 * replication is in use. We can skip the FSM in any case.
+	 */
+	myState->hi_options = HEAP_INSERT_SKIP_FSM |
+		(XLogIsNeeded() ? 0 : HEAP_INSERT_SKIP_WAL);
+	myState->bistate = GetBulkInsertState();
+
+	/* Not using WAL requires smgr_targblock be initially invalid */
+	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);
+
+	bufferedTuples = palloc(MAX_BUFFERED_TUPLES * sizeof(HeapTuple));
+}
+
+
+/*
+ * intorel_receive_buffered --- receive one tuple, store it in buffer and call heap_multi_insert when buffer is full or # of tuples buffered reaches threshold.
+ */
+static bool
+intorel_receive_buffered(TupleTableSlot *slot, DestReceiver *self)
+{
+	DR_intorel *myState = (DR_intorel *) self;
+	HeapTuple	tuple;
+	HeapTuple tuple_copy;
+
+	/*
+	 * get the heap tuple out of the tuple table slot, making sure we have a
+	 * writable copy
+	 */
+	tuple = ExecMaterializeSlot(slot);
+	tuple_copy = heap_copytuple(tuple);
+
+	/*
+	 * force assignment of new OID (see comments in ExecInsert)
+	 */
+	if (myState->rel->rd_rel->relhasoids)
+		HeapTupleSetOid(tuple_copy, InvalidOid);
+
+	bufferedTuples[nBufferedTuples++] = tuple_copy;
+	bufferedTuplesSize += tuple_copy->t_len;
+
+	/*
+	 * If the buffer filled up, flush it.  Also flush if the
+	 * total size of all the tuples in the buffer becomes
+	 * large, to avoid using large amounts of memory for the
+	 * buffer when the tuples are exceptionally wide.
+	 */
+	if (nBufferedTuples == MAX_BUFFERED_TUPLES || bufferedTuplesSize > 65535)
+	{
+		/*
+		 * heap_multi_insert leaks memory, so switch to short-lived memory context
+		 * before calling it.
+		 */
+		// TODO: switch context
+		heap_multi_insert(myState->rel, 
+						  bufferedTuples, 
+						  nBufferedTuples, 
+						  myState->output_cid,
+						  myState->hi_options,
+						  myState->bistate);
+		// TODO: do we need to manually free memory allocated for tuple copies?
+		for (int i = 0; i < nBufferedTuples; i++)
+		{
+			pfree(*(bufferedTuples + i));
+		}
+		nBufferedTuples = 0;
+		bufferedTuplesSize = 0;
+	}
+
+	/* We know this is a newly created relation, so there are no indexes */
+
+	return true;
+}
+
+/*
+ * intorel_shutdown_buffered --- executor end. Flush tuples that are still in the buffer.
+ */
+static void
+intorel_shutdown_buffered(DestReceiver *self)
+{
+	DR_intorel *myState = (DR_intorel *) self;
+
+	/* flush tuples that are still in the buffer */
+	if (nBufferedTuples > 0)
+	{
+		heap_multi_insert(myState->rel, 
+						  bufferedTuples, 
+						  nBufferedTuples, 
+						  myState->output_cid,
+						  myState->hi_options,
+						  myState->bistate);
+
+		nBufferedTuples = 0;
+		bufferedTuplesSize = 0;
+	}
+
+	FreeBulkInsertState(myState->bistate);
+
+	/* If we skipped using WAL, must heap_sync before commit */
+	if (myState->hi_options & HEAP_INSERT_SKIP_WAL)
+		heap_sync(myState->rel);
+
+	/* close rel, but keep lock until commit */
+	heap_close(myState->rel, NoLock);
+	myState->rel = NULL;
+}
+
+/*
+ * intorel_destroy --- release DestReceiver object
+ */
+static void
+intorel_destroy_buffered(DestReceiver *self)
+{
+	pfree(bufferedTuples);
 	pfree(self);
 }

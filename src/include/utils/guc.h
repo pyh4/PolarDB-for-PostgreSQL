@@ -517,6 +517,7 @@ extern bool 	polar_publish_via_partition_root;
 extern bool		px_enable_sethintbits;
 extern bool		polar_enable_buffer_alignment;
 extern bool 	polar_enable_ro_prewarm;
+extern bool     polar_enable_matview_multi_insert;
 extern int		polar_dma_max_standby_wait_delay_size_mb;
 extern char		*polar_partition_recursive_reloptions;
 extern bool		polar_enable_dump_incorrect_checksum_xlog;

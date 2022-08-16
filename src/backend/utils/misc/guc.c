@@ -165,6 +165,7 @@ bool           polar_hold_truncate_interrupt;
 bool 		   polar_replay_fpi_check_lsn;
 bool           polar_enable_localfs_test_mode;
 bool 			polar_enable_ro_prewarm;
+bool polar_enable_matview_multi_insert;
 
 /* polar_realease_date, format:YYYYMMDD */
 static char *polar_release_date;
@@ -3355,6 +3356,17 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL
 		},
 		&polar_enable_ro_prewarm,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_enable_matview_multi_insert", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Enable CREATE MATERIALIZED VIEW to buffer tuples and insert them in batch"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL
+		},
+		&polar_enable_matview_multi_insert,
 		false,
 		NULL, NULL, NULL
 	},
